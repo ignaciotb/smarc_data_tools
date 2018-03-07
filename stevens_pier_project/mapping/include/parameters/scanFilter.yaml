@@ -1,0 +1,22 @@
+{
+# Distance where we accept the sonar data.
+distLow         : 2.0,
+distHigh        : 12.0,
+# Specifies how many sonar scans we ignore in the beginning.
+delay           : 150,
+# Used to find peaks in the sonar scan.
+intensityHigh   : 70,
+# Used when looking at the surrounding points of each peak.
+intensityLow    : 40,
+# Range of acceptable varianve in intensity around peak.
+varLow          : 5,
+varHigh         : 30,
+# Minimum acceptable distance between peaks.
+peakDistance    : 1.0,
+pillarRadius    : 0.5,
+
+# Topics
+inputSonarScan  : "/tritech_micron_node/sonarscan",
+outputSonarScan : "scanFilter",
+outputBuff      : "buff",
+}

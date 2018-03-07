@@ -1,0 +1,12 @@
+{
+# Number os individual scans placed in each buffer
+scanSize            : 120,
+# Number of buffers
+bufferSize          : 10,
+# Radius search parameters
+radiusSearch        : 1.5,
+radiusMinNeighbours : 4,
+# Euclidean clustering parameters.
+ecTolerance         : 0.7,
+ecMinClusterSize    : 4,
+}

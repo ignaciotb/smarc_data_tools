@@ -1,0 +1,26 @@
+{
+# Minimum fitness score achieved by icp.
+fitnessScore          : 1.0,
+# Assosiation minimum distance
+distToFeature         : 1.0,
+
+
+#################################
+# MAP
+#################################
+outputTransform       : "trans_update",
+outputMapWalls        : "map_walls",
+outputMapWallsAligned : "map_walls_aligned",
+
+
+#################################
+# SCANBUFFER
+# ###############################
+scanSize              : 120,
+bufferSize            : 10,
+ecTolerance           : 0.8,
+ecMinClusterSize      : 3,
+outputLines           : "lines_update",
+outputBuffUpdate      : "buff_update",
+outputBuff            : "buff",
+}

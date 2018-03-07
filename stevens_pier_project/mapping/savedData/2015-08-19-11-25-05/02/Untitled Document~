@@ -1,0 +1,35 @@
+### ............. README.txt................................. ###
+### . Auteur : Clarisse LAMBERT
+### . Date : July 2016
+### . Brief : This document is a read allowing to understand the 
+### the different results show in the folder 
+### . Detail : You can find result after the scan matching slam 
+### and the graph-based slam. Some picture are collected to look 
+### the results but more informations can be find in the Octave 
+### files 
+### .......................................................... ###
+
+## . Data collected after the scan matching slam : 
+
+# . Full 2D robot position [x,y]
+pillar0X_path.txt
+# . Full landmarks position from the first detection to the end 
+# of dataset [x,y]
+pillar02.txt
+# . Picture of the result on RVIZ where the green line represent 
+# the robot path and the yellow points are the map computed 
+pillar02_P.png
+
+
+
+## Data collected after the graph-based slam 
+# Back-end of the graph before the optimzation process
+pillar02_OPTIM_B.g2o
+# Back-end of the graph before the optimzation process and after
+# the calculation of the best initial guess
+pillar02_OPTIM_IG.g2o
+# Back-end of the graph after the optimization process 
+pillar02_OPTIM_A.g2o
+# picture of the 
+pillar02_P
+

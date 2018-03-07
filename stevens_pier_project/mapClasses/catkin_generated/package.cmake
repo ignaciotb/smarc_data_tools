@@ -1,0 +1,7 @@
+set(_CATKIN_CURRENT_PACKAGE "mapclasses")
+set(mapclasses_MAINTAINER "unnar <unnar@kth.se>")
+set(mapclasses_DEPRECATED "")
+set(mapclasses_VERSION "0.0.0")
+set(mapclasses_BUILD_DEPENDS "geometry_msgs" "pcl_conversions" "pcl_ros" "roscpp" "rospy" "sensor_msgs" "visualization_msgs" "std_msgs" "tf" "tf_conversions" "eigen_conversions" "message_generation")
+set(mapclasses_RUN_DEPENDS "geometry_msgs" "pcl_conversions" "pcl_ros" "roscpp" "rospy" "sensor_msgs" "visualization_msgs" "std_msgs" "tf" "tf_conversion" "eigen_conversion" "message_runtime")
+set(mapclasses_BUILDTOOL_DEPENDS "catkin")

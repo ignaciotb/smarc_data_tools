@@ -5,7 +5,7 @@ project(mapclasses)
 set (CMAKE_POSITION_INDEPENDENT_CODE TRUE)
 
 # Add the dlib library for svm classification
-include(/home/nacho/workspace/dlib-19.6/dlib/cmake)
+# include(/home/nacho/workspace/dlib-19.6/dlib/cmake)
 find_package(dlib 19.06 REQUIRED)
 IF(DLIB_FOUND)
   include_directories(${DLIB_INCLUDE_DIR})
@@ -57,6 +57,7 @@ add_library(utils src/utils.cpp)
 add_library(scanFilter src/scanFilter.cpp)
 
 add_dependencies(scanFilter ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+add_dependencies(scanBuffer ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
 target_link_libraries(scanBuffer dlib ${catkin_LIBRARIES})
 target_link_libraries(map scanBuffer utils dlib ${catkin_LIBRARIES})

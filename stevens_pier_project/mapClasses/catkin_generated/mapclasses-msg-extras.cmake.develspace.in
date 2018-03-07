@@ -1,0 +1,2 @@
+set(mapclasses_MESSAGE_FILES "/home/clarisse/catkin_ws/src/filteringprocess/filteringprocess/mapClasses/msg/buff.msg")
+set(mapclasses_SERVICE_FILES "")

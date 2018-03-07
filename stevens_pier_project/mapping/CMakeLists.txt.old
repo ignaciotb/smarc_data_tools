@@ -1,0 +1,90 @@
+#set(CMAKE_CXX_FLAGS "-std=c++0x ${CMAKE_CXX_FLAGS}")
+#set(CMAKE_CXX_FLAGS "-fPIC -std=c++0x -fpermissive")
+
+cmake_minimum_required(VERSION 2.8.3)
+project(mapping)
+
+
+ ##---------------------------------------------------------------------------------- ## 
+ ##-------- useful for the dlib library --------------------------------------------- ##
+ # Add the dlib library for svm classification
+find_package(dlib 19.06 REQUIRED)
+include_directories(SYSTEM ${dlib_INCLUDE_DIRS})
+ ## --------------------------------------------------------------------------------- ##
+
+## Find catkin macros and libraries
+## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
+## is used, also find other catkin packages
+find_package(catkin REQUIRED COMPONENTS
+  geometry_msgs
+  pcl_conversions
+  pcl_ros
+  roscpp
+  sensor_msgs
+  visualization_msgs
+  std_msgs
+  tf
+  tf_conversions
+  eigen_conversions
+  mapclasses
+  tf2_kdl
+)
+
+
+include_directories(
+  ${catkin_INCLUDE_DIRS}
+  /home/nacho/workspace/g2o/g2o/core
+  /home/nacho/workspace/g2o/g2o
+  /home/nacho/workspace/g2o
+  /home/nacho/workspace/g2o/build
+  include
+)
+
+catkin_package(
+  DEPENDS
+  CATKIN_DEPENDS roscpp
+  INCLUDE_DIRS include
+  LIBRARIES
+)
+
+ ##---------------------------------------------------------------------------------- ## 
+ ##-------- useful for the G2O library ---------------------------------------------- ##
+
+  #Enable support for C++11
+  SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++0x")
+  SET(LIBRARY_OUTPUT_PATH ${PROJECT_SOURCE_DIR}/lib)
+  LIST(APPEND CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake_modules)
+  #ADD_SUBDIRECTORY(${PROJECT_SOURCE_DIR}/src)
+
+  # find g2o lib
+  find_package(G2O REQUIRED)
+  IF(G2O_FOUND)
+      include_directories(${G2O_INCLUDE_DIR})
+      message("G2O lib is found:" ${G2O_INCLUDE_DIR})
+  ENDIF(G2O_FOUND)
+
+  find_package(Eigen3 REQUIRED)
+  find_package(CSparse REQUIRED)
+  #find_package(Cholmod REQUIRED)
+  include_directories(${CSPARSE_INCLUDE_DIR})
+  include_directories(${EIGEN3_INCLUDE_DIR})
+  #include_directories(${CHOLMOD_INCLUDE_DIR})
+
+  SET(G2O_LIBS g2o_cli g2o_ext_freeglut_minimal g2o_simulator g2o_solver_slam2d_linear g2o_types_icp g2o_types_slam2d g2o_core g2o_interface g2o_solver_csparse g2o_solver_structure_only g2o_types_sba g2o_types_slam3d g2o_csparse_extension g2o_opengl_helper g2o_solver_dense g2o_stuff g2o_types_sclam2d g2o_parser g2o_solver_pcg g2o_types_data g2o_types_sim3 cxsparse )
+
+ ## --------------------------------------------------------------------------------- ##
+
+
+add_library(lib_optim ${G2O_LIB_TYPE}
+  include/optim/edge_se2_pointxy.cpp include/optim/se2.h include/optim/vertex_point_xy.h include/optim/edge_se2.cpp include/optim/edge_se2_pointxy.h include/optim/edge_se2.h include/optim/rand.h include/optim/vertex_point_xy.cpp include/optim/vertex_se2.h include/optim/vertex_se2.cpp include/optim/parameter_se2_offset.h include/optim/parameter_se2_offset.cpp include/optim/types_optim_slam2d.h include/optim/types_optim_slam2d.cpp include/optim/simulator.h include/optim/simulator.cpp include/optim/g2o_tutorial_slam2d_api.h
+)
+
+add_library(optim include/optim/graphSlam.cpp )
+target_link_libraries(optim lib_optim ${G2O_LIBS})
+
+
+add_executable(scanFilterMA src/scanFilter.cpp)
+target_link_libraries(scanFilterMA scanFilter ${catkin_LIBRARIES})
+
+add_executable(mapBuilder src/mapBuilder.cpp)
+target_link_libraries(mapBuilder map scanBuffer optim ${dlib_LIBRARIES} ${catkin_LIBRARIES} )

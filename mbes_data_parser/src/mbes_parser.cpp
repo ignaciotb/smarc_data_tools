@@ -36,6 +36,7 @@ private:
             std::string line;
 
             double time_stamp, easting, northing, depth;
+            double time_stamp_origin, easting_origin, northing_origin, depth_origin;
             unsigned int pose_in_line = 0;
 
             // Check files and directories within directory
@@ -106,15 +107,26 @@ private:
                         pose_in_line += 1;
 
                     }
-                    std::cout << "Line content: " << time_stamp << ", " << easting << ", " << northing << ", " << depth << std::endl;
-                    rov_coord_.emplace_back(time_stamp, easting, northing, depth);
+                    if(first_pose_ == true){
+                        first_pose_ = false;
+                        time_stamp_origin = time_stamp;
+                        easting_origin = easting;
+                        northing_origin = northing;
+                        depth_origin = 0;
+
+                    }
+//                    std::cout << "Line content: " << time_stamp << ", " << easting << ", " << northing << ", " << depth << std::endl;
+                    rov_coord_.emplace_back(time_stamp - time_stamp_origin,
+                                            easting - easting_origin,
+                                            northing - northing_origin,
+                                            depth - depth_origin);
                 }
                 infile.close();
             }
             closedir (dir);
         }
         else{
-            /* could not open directory */
+            // Could not open directory
             ROS_ERROR("Could not check directory");
         }
         ROS_INFO_STREAM(node_name_ << ", finished reading files");

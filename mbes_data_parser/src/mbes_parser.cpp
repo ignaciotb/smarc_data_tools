@@ -8,6 +8,7 @@
 
 #include <tuple>
 
+
 class MBESParser{
 
 public:
@@ -30,7 +31,8 @@ private:
         DIR *dir;
         if ((dir = opendir (dir_path)) != NULL) {
             std::ifstream infile;
-            std::string delimiter = " ";
+            std::string spc_delimiter = " ";
+            std::string colon_delimiter = ":";
             std::string line;
 
             double time_stamp, easting, northing, depth;
@@ -67,7 +69,7 @@ private:
                     }
                     pose_in_line = 0;
                     while(true){
-                        if(line.find(delimiter) == -1){
+                        if(line.find(spc_delimiter) == -1){
                             // case 5:
                             std::cout << std::endl;
                             break;
@@ -80,25 +82,27 @@ private:
                         // 3: Northing
                         // 4: Depth (positive values!)
                         // 5: Zeros
+                        std::string time_str;
                         switch(pose_in_line){
                             case 0:
                                 break;
                             case 1:
-                                time_stamp = std::stod(line.substr(0, line.find(delimiter)));
+                                time_str = line.substr(0, line.find(spc_delimiter));
+                                time_stamp = computeTime(time_str, colon_delimiter);
                                 break;
                             case 2:
-                                easting = std::stod(line.substr(0, line.find(delimiter)));
+                                easting = std::stod(line.substr(0, line.find(spc_delimiter)));
                                 break;
                             case 3:
-                                northing = std::stod(line.substr(0, line.find(delimiter)));
+                                northing = std::stod(line.substr(0, line.find(spc_delimiter)));
                                 break;
                             case 4:
-                                depth = std::stod(line.substr(0, line.find(delimiter)));
+                                depth = std::stod(line.substr(0, line.find(spc_delimiter)));
                                 break;
                         }
 
-                        std::cout << std::stod(line.substr(0, line.find(delimiter))) << std::endl;
-                        line = line.substr(line.find(delimiter) + 1, line.size());
+                        std::cout << std::stod(line.substr(0, line.find(spc_delimiter))) << std::endl;
+                        line = line.substr(line.find(spc_delimiter) + 1, line.size());
                         pose_in_line += 1;
 
                     }
@@ -117,13 +121,46 @@ private:
     }
 
 
+    double computeTime(std::string time_str, std::string colon_delimiter){
+        int time_field_cnt = 0;
+        double time_stamp = 0.0;
+        while(true){
+            time_str = time_str.substr(0, time_str.size());
+            // Extract colon-separated hours/minutes/seconds to compute time in seconds
+            // 0: hours
+            // 1: minutes
+            // 2: seconds
+            switch(time_field_cnt){
+                case 0:
+                    time_stamp += 3600*std::stod(time_str);
+                    break;
+                case 1:
+                    time_stamp += 60*std::stod(time_str);
+                    break;
+                case 2:
+                    time_stamp += std::stod(time_str);
+                    break;
+            }
+            time_str = time_str.substr(time_str.find(colon_delimiter) + 1, time_str.size());
+            time_field_cnt += 1;
+
+            // When the hours/minutes/seconds fields have been parsed, exit
+            if(time_field_cnt==3){
+                break;
+            }
+        }
+
+        return time_stamp;
+    }
+
+
+
     bool first_pose_;
     std::string node_name_;
     ros::NodeHandle *nh_;
     std::vector<std::tuple<double, double, double, double>> rov_coord_;
 
 };
-
 
 int main(int argc, char** argv){
     ros::init(argc, argv, "mbes_parser");

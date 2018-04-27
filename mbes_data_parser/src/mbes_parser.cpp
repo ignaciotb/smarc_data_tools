@@ -2,7 +2,12 @@
 #include <ros/ros.h>
 #include <geometry_msgs/PoseArray.h>
 #include <visualization_msgs/MarkerArray.h>
+#include <visualization_msgs/Marker.h>
 #include <sensor_msgs/PointCloud2.h>
+
+#include <pcl_ros/point_cloud.h>
+#include <pcl/point_types.h>
+#include <pcl_conversions/pcl_conversions.h>
 
 #include <fstream>
 #include <sstream>
@@ -11,6 +16,8 @@
 
 #include <tuple>
 #include <math.h>
+
+typedef pcl::PointCloud<pcl::PointXYZ> PointCloud;
 
 struct mbes_ping{
 
@@ -38,30 +45,77 @@ public:
     MBESParser(std::string node_name, ros::NodeHandle &nh):node_name_(node_name), nh_(&nh) {
 
 //        nh_->param<char>((node_name_ + "/nav_folder"), nav_folder, "/NavUTM");
-        track_pub_ = nh_->advertise<visualization_msgs::MarkerArray>((node_name_ + "/rov_track"), 10);
+        track_pub_ = nh_->advertise<visualization_msgs::Marker>((node_name_ + "/rov_track"), 10);
+        fulltrack_pub_ = nh_->advertise<visualization_msgs::MarkerArray>((node_name_ + "/rov_fulltrack"), 10);
+        map_frame_ = "map";
 
         // Parse ROV track files
-//        first_pose_ = true;
-//        const char* nav_dir = "/home/nacho/catkin_ws/src/smarc-project/smarc_data_tools/mbes_data_parser/Data/NavUTM/";
-//        readNavFilesInDir(nav_dir);
+        first_pose_ = true;
+        const char* nav_dir = "/home/nacho/catkin_ws/src/smarc-project/smarc_data_tools/mbes_data_parser/Data/NavUTM/";
+        readNavFilesInDir(nav_dir);
 
         // Parse MBES pings files
         const char* pings_dir = "/home/nacho/catkin_ws/src/smarc-project/smarc_data_tools/mbes_data_parser/Data/Pings/";
         readMBESFilesInDir(pings_dir);
+        pcl_pub_ = nh_->advertise<PointCloud> ((node_name_ + "/mbes_pcl"), 100);
+
+        std::cout << "Number of pings: " << mbes_pings_.size() << std::endl;
 
         // Publish
-        map_frame_ = "map";
-        while(ros::ok()){
-            pubROVTrack(1);
-            ros::Duration(10).sleep();
-        }
+        unsigned int i = 0;
+        unsigned int j = 0;
+        PointCloud::Ptr pcl_msg;
+//        pubROVFullTrack(1);
 
+        while(ros::ok()){
+
+            // Publish one MBES ping
+            ROS_INFO("Publishing the MBES");
+            if(i >= mbes_pings_.size()-1){
+                i = 0;
+            }
+            pcl_msg = pubMBESPCL(i);
+            i += 2;
+            pcl_conversions::toPCL(ros::Time::now(), pcl_msg->header.stamp);
+            pcl_pub_.publish (pcl_msg);
+            pcl_msg->clear();
+
+            // Publish the ROV track
+            ROS_INFO("Publishing the ROV track");
+            if(j == rov_coord_.size()-1){
+                j = 0;
+            }
+            pubROVTrack(j);
+            j += 1;
+            ros::Duration(0.01).sleep();
+        }
     }
 
 
 private:
 
-    void pubROVTrack(double color){
+    PointCloud::Ptr pubMBESPCL(unsigned int i){
+
+        // Check last ping (for debugging)
+        PointCloud::Ptr pcl_msg (new PointCloud);
+        pcl_msg->header.frame_id = map_frame_;
+        pcl_msg->height = 1;
+        pcl_msg->width = mbes_pings_.at(i).beams.size() + mbes_pings_.at(i+1).beams.size();
+
+        // One side ping
+        std::for_each(mbes_pings_.at(i).beams.begin(), mbes_pings_.at(i).beams.end(), [&pcl_msg](std::vector<double> beam){
+            pcl_msg->points.push_back(pcl::PointXYZ(beam.at(0), beam.at(1), beam.at(2)));
+        });
+
+        // Other side ping
+        std::for_each(mbes_pings_.at(i+1).beams.begin(), mbes_pings_.at(i+1).beams.end(), [&pcl_msg](std::vector<double> beam){
+            pcl_msg->points.push_back(pcl::PointXYZ(beam.at(0), beam.at(1), beam.at(2)));
+        });
+
+        return pcl_msg;
+    }
+
+    void pubROVFullTrack(double color){
 
         int cnt = 0;
         visualization_msgs::MarkerArray marker_array;
@@ -90,7 +144,36 @@ private:
 
             marker_array.markers.push_back(marker);
         }
-        track_pub_.publish(marker_array);
+        fulltrack_pub_.publish(marker_array);
+    }
+
+    void pubROVTrack(unsigned int i){
+
+        visualization_msgs::Marker marker;
+        std::tuple<double, double, double, double> pose_t = rov_coord_.at(i);
+
+        marker.header.frame_id = map_frame_;
+        marker.header.stamp = ros::Time::now();
+        marker.ns = "rov_track";
+        marker.id = i;
+        marker.type = visualization_msgs::Marker::SPHERE;
+        marker.action = visualization_msgs::Marker::ADD;
+        marker.pose.position.x = std::get<1>(pose_t);
+        marker.pose.position.y = std::get<2>(pose_t);
+        marker.pose.position.z = std::get<3>(pose_t);
+        marker.pose.orientation.x = 0.0;
+        marker.pose.orientation.y = 0.0;
+        marker.pose.orientation.z = 0.0;
+        marker.pose.orientation.w = 1.0;
+        marker.scale.x = 1;
+        marker.scale.y = 1;
+        marker.scale.z = 1;
+        marker.color.a = 1.0;
+        marker.color.r = 1.0;
+        marker.color.g = 1.0;
+        marker.color.b = 0.0;
+
+        track_pub_.publish(marker);
     }
 
 
@@ -106,7 +189,7 @@ private:
             std::vector<double> new_beam;
             double time_stamp, ping_id, beam_id;
             double x_pose, y_pose, z_pose;
-            double time_stamp_origin, x_pose_origin, y_pose_origin, z_pose_origin;
+            double time_stamp_origin;
             double heave, heading, pitch, roll;
 
             unsigned int pose_in_line = 0;
@@ -119,19 +202,19 @@ private:
             // For every file in the dir
             for(const std::string file: files){
 
-                // Init state machine
-                beam_num_in_file = 0;
-                int pings_cnt = 0;
-
                 // Open file
                 infile.open(std::string(dir_path) + file);
                 if(infile.is_open()) {
-                    ROS_DEBUG_STREAM(node_name_ << ": file open");
+                    ROS_INFO_STREAM(std::string(dir_path) + file << " file open");
                 }
                 else{
                     ROS_ERROR_STREAM("Could not open file: " << std::string(dir_path) + file);
                     continue;
                 }
+
+                // Init state machine
+                beam_num_in_file = 0;
+                int pings_cnt = 0;
 
                 // Read a new line
                 while (std::getline(infile, line)){
@@ -211,29 +294,24 @@ private:
                     if(beam_num_in_file == 1){
                         beam_num_in_file = 2;
                         prev_ping_id = 0;
-                        x_pose_origin = x_pose;
-                        y_pose_origin = y_pose;
-                        z_pose_origin = z_pose;
                     }
 
                     // If new beam id found, create a new ping object
                     if(prev_ping_id != ping_id){
-                        if(pings_cnt > 1000){
-                            ROS_INFO("1000 pings created, exiting");
-                            break;
-                        }
-                        std::cout << "New ping created: " << ping_id << ", " << time_stamp << std::endl;
+//                        if(pings_cnt > 10){
+//                            ROS_INFO("1000 pings created, exiting");
+//                            break;
+//                        }
                         mbes_pings_.emplace_back(ping_id, time_stamp, heading, heave, pitch, roll);
                         prev_ping_id = ping_id;
                         time_stamp_origin = time_stamp;
                         pings_cnt += 1;
-
                     }
 
                     // Store new beam in current ping
                     std::vector<double> new_beam;
-                    new_beam.push_back(x_pose - x_pose_origin);
-                    new_beam.push_back(y_pose - y_pose_origin);
+                    new_beam.push_back(x_pose - easting_origin_);
+                    new_beam.push_back(y_pose - northing_origin_);
                     new_beam.push_back(z_pose);
                     mbes_pings_.back().beams.push_back(new_beam);
                 }
@@ -244,19 +322,7 @@ private:
             // Could not open directory
             ROS_ERROR("Could not check directory");
         }
-        ROS_INFO_STREAM(node_name_ << ", finished reading files");
-
-        // Check last ping (for debugging)
-
-//        sensor_msgs::PointCloud2 pcl2_msg;
-//        pcl2_msg.header.stamp = ros::Time::now();
-//        pcl2_msg.header.frame_id = map_frame_;
-
-//        std::for_each(mbes_pings_.begin(), mbes_pings_.end(), [&pcl2_msg](mbes_ping ping_n){
-//            std::for_each(ping_n.beams.begin(), ping_n.beams.end(), [&pcl2_msg](std::vector<double> beam){
-////                pcl2_msg.data.push_back(beam);
-//            });
-//        });
+        ROS_INFO_STREAM(node_name_ << ", finished reading MBES files");
 
     }
 
@@ -271,7 +337,7 @@ private:
             std::sort(files.begin(), files.end());
 
             double time_stamp, easting, northing, depth;
-            double time_stamp_origin, easting_origin, northing_origin, depth_origin;
+            double time_stamp_origin, depth_origin;
             unsigned int pose_in_line = 0;
             std::ifstream infile;
             std::string spc_delimiter = " ";
@@ -283,7 +349,7 @@ private:
                 // Open file
                 infile.open(std::string(dir_path) + file);
                 if(infile.is_open()) {
-                    ROS_DEBUG_STREAM(node_name_ << ": file open");
+                    ROS_INFO_STREAM(std::string(dir_path) + file << " file open");
                 }
                 else{
                     ROS_ERROR_STREAM("Could not open file: " << std::string(dir_path) + file);
@@ -331,15 +397,15 @@ private:
                     if(first_pose_ == true){
                         first_pose_ = false;
                         time_stamp_origin = time_stamp;
-                        easting_origin = easting;
-                        northing_origin = northing;
+                        easting_origin_ = easting;
+                        northing_origin_ = northing;
                         depth_origin = 0;
                     }
 
                     // Store new ROV waypoint
                     rov_coord_.emplace_back(time_stamp - time_stamp_origin,
-                                            easting - easting_origin,
-                                            northing - northing_origin,
+                                            easting - easting_origin_,
+                                            northing - northing_origin_,
                                             depth - depth_origin);
                 }
                 infile.close();
@@ -349,7 +415,7 @@ private:
             // Could not open directory
             ROS_ERROR("Could not check directory");
         }
-        ROS_INFO_STREAM(node_name_ << ", finished reading files");
+        ROS_INFO_STREAM(node_name_ << ", finished reading nav files");
     }
 
 
@@ -413,8 +479,12 @@ private:
     }
 
     std::string node_name_;
+    double easting_origin_, northing_origin_;
+
     ros::NodeHandle *nh_;
     ros::Publisher track_pub_;
+    ros::Publisher fulltrack_pub_;
+    ros::Publisher pcl_pub_;
 
     std::string map_frame_;
 

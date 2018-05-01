@@ -4,10 +4,17 @@
 #include <visualization_msgs/MarkerArray.h>
 #include <visualization_msgs/Marker.h>
 #include <sensor_msgs/PointCloud2.h>
+#include <geometry_msgs/PoseStamped.h>
 
 #include <pcl_ros/point_cloud.h>
+#include <pcl_ros/transforms.h>
 #include <pcl/point_types.h>
 #include <pcl_conversions/pcl_conversions.h>
+
+#include <tf/tf.h>
+#include <tf/transform_listener.h>
+#include <tf/transform_datatypes.h>
+#include <tf/transform_broadcaster.h>
 
 #include <fstream>
 #include <sstream>
@@ -16,12 +23,15 @@
 
 #include <tuple>
 #include <math.h>
+#include <algorithm>
+
+#include <eigen3/Eigen/Core>
 
 typedef pcl::PointCloud<pcl::PointXYZ> PointCloud;
 
 struct mbes_ping{
 
-    mbes_ping(unsigned int id, double time_stamp,double heading, double heave, double pitch, double roll){
+    mbes_ping(unsigned int id, double time_stamp, double heading, double heave, double pitch, double roll){
         id_ = id;
         heading_ = heading;
         heave_ = heave;
@@ -47,7 +57,10 @@ public:
 //        nh_->param<char>((node_name_ + "/nav_folder"), nav_folder, "/NavUTM");
         track_pub_ = nh_->advertise<visualization_msgs::Marker>((node_name_ + "/rov_track"), 10);
         fulltrack_pub_ = nh_->advertise<visualization_msgs::MarkerArray>((node_name_ + "/rov_fulltrack"), 10);
+        rov_pose_pub_ = nh_->advertise<geometry_msgs::PoseStamped>((node_name_ + "/rov_pose_t"), 10);
+        pcl_pub_ = nh_->advertise<PointCloud> ((node_name_ + "/mbes_pcl"), 100);
         map_frame_ = "map";
+        rov_frame_ = "rov_link";
 
         // Parse ROV track files
         first_pose_ = true;
@@ -55,46 +68,156 @@ public:
         readNavFilesInDir(nav_dir);
 
         // Parse MBES pings files
+        first_orientation_ = true;
         const char* pings_dir = "/home/nacho/catkin_ws/src/smarc-project/smarc_data_tools/mbes_data_parser/Data/Pings/";
         readMBESFilesInDir(pings_dir);
-        pcl_pub_ = nh_->advertise<PointCloud> ((node_name_ + "/mbes_pcl"), 100);
 
         std::cout << "Number of pings: " << mbes_pings_.size() << std::endl;
+        std::cout << "Number of ROV poses: " << rov_coord_.size() << std::endl;
 
-        // Publish
-        unsigned int i = 0;
-        unsigned int j = 0;
-        PointCloud::Ptr pcl_msg;
-//        pubROVFullTrack(1);
+        // Run main loop
+        double freq = 100;
+        timer_run_ = nh_->createTimer(ros::Duration(1.0 / std::max(freq, 1.0)), &MBESParser::run, this);
 
-        while(ros::ok()){
-
-            // Publish one MBES ping
-            ROS_INFO("Publishing the MBES");
-            if(i >= mbes_pings_.size()-1){
-                i = 0;
-            }
-            pcl_msg = pubMBESPCL(i);
-            i += 2;
-            pcl_conversions::toPCL(ros::Time::now(), pcl_msg->header.stamp);
-            pcl_pub_.publish (pcl_msg);
-            pcl_msg->clear();
-
-            // Publish the ROV track
-            ROS_INFO("Publishing the ROV track");
-            if(j == rov_coord_.size()-1){
-                j = 0;
-            }
-            pubROVTrack(j);
-            j += 1;
-            ros::Duration(0.01).sleep();
-        }
+        ros::spin();
     }
 
 
 private:
 
-    PointCloud::Ptr pubMBESPCL(unsigned int i){
+    void run(const ros::TimerEvent&){
+
+        PointCloud::Ptr pcl_msg;
+        PointCloud pcl_msg_rov;
+        pcl_msg_rov.header.frame_id = rov_frame_;
+        tf::Transform tf_rov_map;
+
+//      pubROVFullTrack(1);
+
+        // Publish one MBES ping
+        ROS_INFO("Publishing the MBES");
+        if(i_ >= mbes_pings_.size()-1){
+            i_ = 0;
+        }
+
+        // Extract beams as PCL
+        pcl_msg = createMBESPcl(i_);
+
+        // Compute tf from map to ROV pose at t given by current ping
+        interpolateROVPose(tf_rov_map);
+        i_ += 2;
+
+        // BC ROV pose interpolated
+        bcMapROVTF(tf_rov_map);
+        ros::Duration(0.01).sleep();
+
+        // Transform PCL from map to ROV pose at t
+        pcl_ros::transformPointCloud(rov_frame_, *pcl_msg, pcl_msg_rov, tf_listener_);
+
+        // Publish the MBES ping transformed
+        pcl_conversions::toPCL(ros::Time::now(), pcl_msg_rov.header.stamp);
+        pcl_pub_.publish (pcl_msg_rov);
+        pcl_msg_rov.clear();
+        pcl_msg->clear();
+
+        // Publish the ROV track
+        pubROVPose(tf_rov_map);
+
+        if(j_ == rov_coord_.size()-1){
+            j_ = 0;
+        }
+        pubROVTrack(j_);
+        j_ += 1;
+    }
+
+
+    bool bcMapROVTF(tf::Transform &tf_rov_map){
+        tf::StampedTransform tf_odom_map_stp = tf::StampedTransform(tf_rov_map,
+                                               ros::Time::now(),
+                                               map_frame_,
+                                               rov_frame_);
+
+        tf_odom_map_stp.getRotation().normalize();
+
+        geometry_msgs::TransformStamped msg_odom_map;
+        tf::transformStampedTFToMsg(tf_odom_map_stp, msg_odom_map);
+        map_rov_bc_.sendTransform(msg_odom_map);
+        bool broadcasted = true;
+
+        return broadcasted;
+    }
+
+
+    void interpolateROVPose(tf::Transform &tf_rov_map){
+
+        // Look for closest time stamp in ROV track
+        double time_t = (mbes_pings_.at(i_).time_stamp_ + mbes_pings_.at(i_ + 1).time_stamp_) / 2;
+        double min_t_diff = 10000.0;
+        unsigned int rov_pose_id = 0;
+        unsigned int cnt = 0;
+
+        // TODO: reduce range of search
+        std::for_each(rov_coord_.begin(), rov_coord_.end(), [&cnt, &time_t, &min_t_diff, &rov_pose_id](std::tuple<double, double, double, double> rov_pose){
+            if(min_t_diff > std::abs(std::get<0>(rov_pose) - time_t)){
+                min_t_diff = std::abs(std::get<0>(rov_pose) - time_t);
+                rov_pose_id = cnt;
+            }
+            cnt += 1;
+        });
+
+//        rov_pose_id = cnt;
+        std::cout << "Time of ROV pose: " << std::get<0>(rov_coord_.at(rov_pose_id)) << std::endl;
+        std::cout << "Time of ping: " << time_t << std::endl;
+        std::cout << "ROV pose: " << std::endl;
+        std::cout << std::get<1>(rov_coord_.at(rov_pose_id)) << ", " << std::get<2>(rov_coord_.at(rov_pose_id)) << ", " << std::get<3>(rov_coord_.at(rov_pose_id)) << std::endl;
+
+        // Interpolate ROV position
+        int next_it = (std::get<0>(rov_coord_.at(rov_pose_id)) > time_t)? -1: 1;
+
+        Eigen::Vector3d rov_pose_t1 = Eigen::Vector3d(std::get<1>(rov_coord_.at(rov_pose_id)),
+                                                      std::get<2>(rov_coord_.at(rov_pose_id)),
+                                                      std::get<3>(rov_coord_.at(rov_pose_id)));
+
+        Eigen::Vector3d rov_pose_t2 = Eigen::Vector3d(std::get<1>(rov_coord_.at(rov_pose_id + next_it)),
+                                                      std::get<2>(rov_coord_.at(rov_pose_id + next_it)),
+                                                      std::get<3>(rov_coord_.at(rov_pose_id + next_it)));
+
+        Eigen::Vector3d position = rov_pose_t1 + ((rov_pose_t2 - rov_pose_t1)/(std::get<0>(rov_coord_.at(rov_pose_id + next_it)) - std::get<0>(rov_coord_.at(rov_pose_id)))) *
+                                   (time_t - std::get<0>(rov_coord_.at(rov_pose_id)));
+
+        std::cout << "Position interpolated: " << position << std::endl;
+
+        // And orientation
+        tf::Matrix3x3 m;
+//        m.setRPY(mbes_pings_.at(i_).roll_ * M_PI/180,
+//                 mbes_pings_.at(i_).pitch_ * M_PI/180,
+//                 mbes_pings_.at(i_).heave_ * M_PI/180);
+
+        m.setRPY(0,0,0);
+        tf_rov_map = tf::Transform(m, tf::Vector3(position(0),position(1),position(2)));
+    }
+
+
+    void pubROVPose(tf::Transform tf_map_rov){
+
+        geometry_msgs::PoseStamped rov_pose;
+        geometry_msgs::Quaternion q;
+        tf::quaternionTFToMsg(tf_map_rov.getRotation(), q);
+
+        rov_pose.header.frame_id = map_frame_;
+        rov_pose.header.stamp = ros::Time::now();
+        rov_pose.pose.position.x = tf_map_rov.getOrigin().getX();
+        rov_pose.pose.position.y = tf_map_rov.getOrigin().getY();
+        rov_pose.pose.position.z = tf_map_rov.getOrigin().getZ();
+        rov_pose.pose.orientation = q;
+
+        ROS_INFO("Publishing the ROV track");
+        rov_pose_pub_.publish(rov_pose);
+
+    }
+
+
+    PointCloud::Ptr createMBESPcl(unsigned int i){
 
         // Check last ping (for debugging)
         PointCloud::Ptr pcl_msg (new PointCloud);
@@ -176,7 +299,6 @@ private:
         track_pub_.publish(marker);
     }
 
-
     void readMBESFilesInDir(auto dir_path){
         DIR *dir;
         if ((dir = opendir (dir_path)) != NULL) {
@@ -186,10 +308,9 @@ private:
             // Sort the files before parsing them (naming == acquisition time)
             std::sort(files.begin(), files.end());
 
-            std::vector<double> new_beam;
+            double time_stamp_origin, roll_origin, pitch_origin, yaw_origin;
             double time_stamp, ping_id, beam_id;
             double x_pose, y_pose, z_pose;
-            double time_stamp_origin;
             double heave, heading, pitch, roll;
 
             unsigned int pose_in_line = 0;
@@ -214,7 +335,6 @@ private:
 
                 // Init state machine
                 beam_num_in_file = 0;
-                int pings_cnt = 0;
 
                 // Read a new line
                 while (std::getline(infile, line)){
@@ -252,9 +372,11 @@ private:
                                 break;
                             case 1:
                                 time_stamp = computeTimePing(line.substr(0, line.find(tab_delimiter)));
+//                                std::cout << "Time stamp from hours: "<< time_stamp << std::endl;
                                 break;
                             case 2:
                                 time_stamp += std::stod(line.substr(0, line.find(tab_delimiter)));
+//                                std::cout << "Time stamp from sec: "<< time_stamp << std::endl;
                                 break;
                             case 3:
                                 ping_id = std::stod(line.substr(0, line.find(tab_delimiter)));
@@ -290,6 +412,16 @@ private:
                         pose_in_line += 1;
                     }
 
+                    // Init orientation from first ping in first file
+                    if(first_orientation_){
+                        first_orientation_ = false;
+                        ROS_INFO("Init first orientation!");
+                        time_stamp_origin = time_stamp;
+                        yaw_origin = heading;
+                        roll_origin = roll;
+                        pitch_origin = pitch;
+                    }
+
                     // Init caches with first beam in file
                     if(beam_num_in_file == 1){
                         beam_num_in_file = 2;
@@ -298,22 +430,31 @@ private:
 
                     // If new beam id found, create a new ping object
                     if(prev_ping_id != ping_id){
-//                        if(pings_cnt > 10){
+//                        if(mbes_pings_.size() > 10){
 //                            ROS_INFO("1000 pings created, exiting");
 //                            break;
 //                        }
-                        mbes_pings_.emplace_back(ping_id, time_stamp, heading, heave, pitch, roll);
+//                        std::cout << "New ping: "<< ping_id << ", " << time_stamp - time_stamp_origin << std::endl;
+                        mbes_pings_.emplace_back(ping_id,
+                                                 time_stamp - time_stamp_origin,
+                                                 heading,
+                                                 heave - yaw_origin,
+                                                 pitch - pitch_origin,
+                                                 roll_origin - roll_origin);
                         prev_ping_id = ping_id;
-                        time_stamp_origin = time_stamp;
-                        pings_cnt += 1;
                     }
 
                     // Store new beam in current ping
+//                    std::cout << "New beam in ping "<< ping_id << ", " << time_stamp - time_stamp_origin << std::endl;
                     std::vector<double> new_beam;
                     new_beam.push_back(x_pose - easting_origin_);
                     new_beam.push_back(y_pose - northing_origin_);
                     new_beam.push_back(z_pose);
                     mbes_pings_.back().beams.push_back(new_beam);
+
+//                    if((time_stamp - time_stamp_origin) == 120.5){
+//                        break;
+//                    }
                 }
                 infile.close();
             }
@@ -403,6 +544,7 @@ private:
                     }
 
                     // Store new ROV waypoint
+//                    std::cout << "ROV pose: "<< time_stamp - time_stamp_origin << ", " << easting - easting_origin_ << ", " << northing - northing_origin_ << ", " <<  depth - depth_origin << std::endl;
                     rov_coord_.emplace_back(time_stamp - time_stamp_origin,
                                             easting - easting_origin_,
                                             northing - northing_origin_,
@@ -479,16 +621,25 @@ private:
     }
 
     std::string node_name_;
-    double easting_origin_, northing_origin_;
+    double easting_origin_, northing_origin_, yaw_origin_;
 
     ros::NodeHandle *nh_;
+    ros::Timer timer_run_;
     ros::Publisher track_pub_;
     ros::Publisher fulltrack_pub_;
     ros::Publisher pcl_pub_;
+    ros::Publisher rov_pose_pub_;
 
     std::string map_frame_;
+    std::string rov_frame_;
+    tf::TransformBroadcaster map_rov_bc_;
+    tf::TransformListener tf_listener_;
 
     bool first_pose_;
+    bool first_orientation_;
+    unsigned int i_ = 0;
+    unsigned int j_ = 0;
+
     std::vector<std::tuple<double, double, double, double>> rov_coord_;
     std::vector<mbes_ping> mbes_pings_;
 };

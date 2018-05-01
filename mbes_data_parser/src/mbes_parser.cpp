@@ -189,11 +189,10 @@ private:
 
         // And orientation
         tf::Matrix3x3 m;
-//        m.setRPY(mbes_pings_.at(i_).roll_ * M_PI/180,
-//                 mbes_pings_.at(i_).pitch_ * M_PI/180,
-//                 mbes_pings_.at(i_).heave_ * M_PI/180);
+        m.setRPY(mbes_pings_.at(i_).roll_ * M_PI/180,
+                 mbes_pings_.at(i_).pitch_ * M_PI/180,
+                 mbes_pings_.at(i_).heave_ * M_PI/180);
 
-        m.setRPY(0,0,0);
         tf_rov_map = tf::Transform(m, tf::Vector3(position(0),position(1),position(2)));
     }
 

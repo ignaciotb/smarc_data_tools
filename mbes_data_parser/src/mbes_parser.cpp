@@ -28,6 +28,7 @@
 #include <eigen3/Eigen/Core>
 
 typedef pcl::PointCloud<pcl::PointXYZ> PointCloud;
+typedef pcl::PointCloud<pcl::PointXYZI> PointCloudI;
 
 struct mbes_ping{
 
@@ -58,21 +59,26 @@ public:
         track_pub_ = nh_->advertise<visualization_msgs::Marker>((node_name_ + "/rov_track"), 10);
         fulltrack_pub_ = nh_->advertise<visualization_msgs::MarkerArray>((node_name_ + "/rov_fulltrack"), 10);
         rov_pose_pub_ = nh_->advertise<geometry_msgs::PoseStamped>((node_name_ + "/rov_pose_t"), 10);
-        pcl_pub_ = nh_->advertise<PointCloud> ((node_name_ + "/mbes_pcl"), 100);
+        pcl_pub_ = nh_->advertise<PointCloudI> ((node_name_ + "/mbes_pcl"), 100);
         map_frame_ = "map";
-        rov_frame_ = "rov_link";
+        rov_frame_ = "rov_link";      
 
         // Parse ROV track files
         first_pose_ = true;
-        const char* nav_dir = "/home/nacho/catkin_ws/src/smarc-project/smarc_data_tools/mbes_data_parser/Data/NavUTM/";
+        const char* nav_dir = "/home/nacho/catkin_ws/src/smarc-project/smarc_data_tools/mbes_data_parser/Data/Windfarm/NavUTM/";
         readNavFilesInDir(nav_dir);
 
         // Parse MBES pings files
         first_orientation_ = true;
-        const char* pings_dir = "/home/nacho/catkin_ws/src/smarc-project/smarc_data_tools/mbes_data_parser/Data/Pings/";
+        const char* pings_dir = "/home/nacho/catkin_ws/src/smarc-project/smarc_data_tools/mbes_data_parser/Data/Windfarm/Pings/";
         readMBESFilesInDir(pings_dir);
 
+        // Parse Intensity files
+        const char* intensities_dir = "/home/nacho/catkin_ws/src/smarc-project/smarc_data_tools/mbes_data_parser/Data/Windfarm/Intensities/";
+        readMBESIntFilesInDir(intensities_dir);
+
         std::cout << "Number of pings: " << mbes_pings_.size() << std::endl;
+        std::cout << "Number of intensities: " << intensities_.size() << std::endl;
         std::cout << "Number of ROV poses: " << rov_coord_.size() << std::endl;
 
         // Run main loop
@@ -87,16 +93,15 @@ private:
 
     void run(const ros::TimerEvent&){
 
-        PointCloud::Ptr pcl_msg;
-        PointCloud pcl_msg_rov;
-        pcl_msg_rov.header.frame_id = rov_frame_;
+        PointCloudI::Ptr pcl_msg;
+        PointCloudI pcl_msg_rov;
+//        pcl_msg_rov.header.frame_id = rov_frame_;
         tf::Transform tf_rov_map;
 
 //      pubROVFullTrack(1);
 
         // Publish one MBES ping
-        ROS_INFO("Publishing the MBES");
-        if(i_ >= mbes_pings_.size()-1){
+        if(i_ >= mbes_pings_.size()-1){ // Run pub in a loop
             i_ = 0;
         }
 
@@ -109,10 +114,21 @@ private:
 
         // BC ROV pose interpolated
         bcMapROVTF(tf_rov_map);
-        ros::Duration(0.01).sleep();
+//        ros::Duration(0.01).sleep();
 
         // Transform PCL from map to ROV pose at t
-        pcl_ros::transformPointCloud(rov_frame_, *pcl_msg, pcl_msg_rov, tf_listener_);
+        if(!tf_listener_.waitForTransform(rov_frame_,
+                                          map_frame_,
+                                          ros::Time(0),
+                                          ros::Duration(0.1))){
+            ROS_WARN("Skipping iteration");
+            return;
+        }
+        else{
+            pcl_ros::transformPointCloud(rov_frame_, *pcl_msg, pcl_msg_rov, tf_listener_);
+            ROS_INFO("Transforming PCL");
+            std::cout << "Original PCL " << pcl_msg->points.back() << " transformed " << pcl_msg_rov.points.back() << std::endl;
+        }
 
         // Publish the MBES ping transformed
         pcl_conversions::toPCL(ros::Time::now(), pcl_msg_rov.header.stamp);
@@ -123,15 +139,17 @@ private:
         // Publish the ROV track
         pubROVPose(tf_rov_map);
 
-        if(j_ == rov_coord_.size()-1){
-            j_ = 0;
-        }
-        pubROVTrack(j_);
-        j_ += 1;
+//        if(j_ == rov_coord_.size()-1){
+//            j_ = 0;
+//        }
+//        pubROVTrack(j_);
+//        j_ += 1;
     }
 
 
     bool bcMapROVTF(tf::Transform &tf_rov_map){
+
+        // Create map to ROV_frame transform
         tf::StampedTransform tf_odom_map_stp = tf::StampedTransform(tf_rov_map,
                                                ros::Time::now(),
                                                map_frame_,
@@ -165,7 +183,6 @@ private:
             cnt += 1;
         });
 
-//        rov_pose_id = cnt;
         std::cout << "Time of ROV pose: " << std::get<0>(rov_coord_.at(rov_pose_id)) << std::endl;
         std::cout << "Time of ping: " << time_t << std::endl;
         std::cout << "ROV pose: " << std::endl;
@@ -210,28 +227,39 @@ private:
         rov_pose.pose.position.z = tf_map_rov.getOrigin().getZ();
         rov_pose.pose.orientation = q;
 
-        ROS_INFO("Publishing the ROV track");
+        ROS_INFO("Broadcasting the ROV track");
         rov_pose_pub_.publish(rov_pose);
 
     }
 
 
-    PointCloud::Ptr createMBESPcl(unsigned int i){
+    PointCloudI::Ptr createMBESPcl(unsigned int i){
 
         // Check last ping (for debugging)
-        PointCloud::Ptr pcl_msg (new PointCloud);
+        PointCloudI::Ptr pcl_msg (new PointCloudI);
+        pcl::PointXYZI pclI;
         pcl_msg->header.frame_id = map_frame_;
         pcl_msg->height = 1;
         pcl_msg->width = mbes_pings_.at(i).beams.size() + mbes_pings_.at(i+1).beams.size();
 
         // One side ping
-        std::for_each(mbes_pings_.at(i).beams.begin(), mbes_pings_.at(i).beams.end(), [&pcl_msg](std::vector<double> beam){
-            pcl_msg->points.push_back(pcl::PointXYZ(beam.at(0), beam.at(1), beam.at(2)));
+        std::for_each(mbes_pings_.at(i).beams.begin(), mbes_pings_.at(i).beams.end(), [&](std::vector<double> beam){
+            pclI.intensity = intensities_.back();
+            intensities_.pop_back();
+            pclI.x = beam.at(0);
+            pclI.y = beam.at(1);
+            pclI.z = beam.at(2);
+            pcl_msg->points.push_back(pclI);
         });
 
         // Other side ping
-        std::for_each(mbes_pings_.at(i+1).beams.begin(), mbes_pings_.at(i+1).beams.end(), [&pcl_msg](std::vector<double> beam){
-            pcl_msg->points.push_back(pcl::PointXYZ(beam.at(0), beam.at(1), beam.at(2)));
+        std::for_each(mbes_pings_.at(i+1).beams.begin(), mbes_pings_.at(i+1).beams.end(), [&](std::vector<double> beam){
+            pclI.intensity = intensities_.back();
+            intensities_.pop_back();
+            pclI.x = beam.at(0);
+            pclI.y = beam.at(1);
+            pclI.z = beam.at(2);
+            pcl_msg->points.push_back(pclI);
         });
 
         return pcl_msg;
@@ -298,6 +326,79 @@ private:
         track_pub_.publish(marker);
     }
 
+
+    void readMBESIntFilesInDir(auto dir_path){
+        DIR *dir;
+        if ((dir = opendir (dir_path)) != NULL) {
+            // Open directory and check all files inside
+            std::vector<std::string> files = checkFilesInDir(dir);
+
+            // Sort the files before parsing them (naming == acquisition time)
+            std::sort(files.begin(), files.end());
+
+            int intensity;
+
+            unsigned int pose_in_line = 0;
+            std::ifstream infile;
+            std::string space_delimiter = " ";
+            std::string line;
+
+            // For every file in the dir
+            for(const std::string file: files){
+
+                // Open file
+                infile.open(std::string(dir_path) + file);
+                if(infile.is_open()) {
+                    ROS_INFO_STREAM(std::string(dir_path) + file << " file open");
+                }
+                else{
+                    ROS_ERROR_STREAM("Could not open file: " << std::string(dir_path) + file);
+                    continue;
+                }
+
+                // Read a new line
+                while (std::getline(infile, line)){
+
+                    // Parse a line
+                    pose_in_line = 0;
+                    while(true){
+                        if(line.find(space_delimiter) == -1){
+                            // case 3:
+                            intensity = std::stoi(line.substr(0, line.find(space_delimiter)));
+                            break;
+                        }
+
+                        // Extract space-separated numbers: Intensity files
+                        // 0: X (UTM)
+                        // 1: Y (UTM)
+                        // 2: Z (UTM)
+                        // 3: Intensity
+                        switch(pose_in_line){
+                            case 0:
+                                break;
+                            case 1:
+                                break;
+                            case 2:
+                                break;
+                        }
+                        line = line.substr(line.find(space_delimiter) + 1, line.size());
+                        pose_in_line += 1;
+                    }
+
+                    // Store intensities in common vector
+                    intensities_.push_back(intensity);
+                }
+                infile.close();
+            }
+        }
+        else{
+            // Could not open directory
+            ROS_ERROR("Could not check directory");
+        }
+        ROS_INFO_STREAM(node_name_ << ", finished reading Intensities files");
+
+    }
+
     void readMBESFilesInDir(auto dir_path){
         DIR *dir;
         if ((dir = opendir (dir_path)) != NULL) {
@@ -348,7 +449,8 @@ private:
                     pose_in_line = 0;
                     while(true){
                         if(line.find(tab_delimiter) == -1){
-                            // case 5: exit
+                            // case 12:
+                            roll = std::stod(line.substr(0, line.find(tab_delimiter)));
                             break;
                         }
 
@@ -403,9 +505,6 @@ private:
                             case 11:
                                 pitch = std::stod(line.substr(0, line.find(tab_delimiter)));
                                 break;
-                            case 12:
-                                roll = std::stod(line.substr(0, line.find(tab_delimiter)));
-                                break;
                         }
                         line = line.substr(line.find(tab_delimiter) + 1, line.size());
                         pose_in_line += 1;
@@ -414,7 +513,6 @@ private:
                     // Init orientation from first ping in first file
                     if(first_orientation_){
                         first_orientation_ = false;
-                        ROS_INFO("Init first orientation!");
                         time_stamp_origin = time_stamp;
                         yaw_origin = heading;
                         roll_origin = roll;
@@ -429,11 +527,7 @@ private:
 
                     // If new beam id found, create a new ping object
                     if(prev_ping_id != ping_id){
-//                        if(mbes_pings_.size() > 10){
-//                            ROS_INFO("1000 pings created, exiting");
-//                            break;
-//                        }
-//                        std::cout << "New ping: "<< ping_id << ", " << time_stamp - time_stamp_origin << std::endl;
+                        std::cout << "New ping: "<< ping_id << " timing: " << time_stamp - time_stamp_origin <<  " time_stamp " << time_stamp << " and origin time_stamp " << time_stamp_origin << std::endl;
                         mbes_pings_.emplace_back(ping_id,
                                                  time_stamp - time_stamp_origin,
                                                  heading,
@@ -442,7 +536,7 @@ private:
                                                  roll_origin - roll_origin);
                         prev_ping_id = ping_id;
                     }
-
+                    time_stamp = 0;
                     // Store new beam in current ping
 //                    std::cout << "New beam in ping "<< ping_id << ", " << time_stamp - time_stamp_origin << std::endl;
                     std::vector<double> new_beam;
@@ -452,6 +546,7 @@ private:
                     mbes_pings_.back().beams.push_back(new_beam);
 
 //                    if((time_stamp - time_stamp_origin) == 120.5){
+//                        std::cout << "Troubles!" << std::endl;
 //                        break;
 //                    }
                 }
@@ -598,8 +693,8 @@ private:
     double computeTimePing(std::string time_str){
 
         double time_stamp = std::stod(time_str);
-        double mins = fmod(time_stamp, 10);   // Remove month and day from time
-        double hours = (fmod(time_stamp, 1000) - mins)/100;
+        double mins = fmod(time_stamp, 100);   // Remove month and day from time
+        double hours = (fmod(time_stamp, 10000) - mins)/100;
 
         return hours*3600 + mins*60;
     }
@@ -618,6 +713,7 @@ private:
         closedir(dir);
         return files;
     }
+
 
     std::string node_name_;
     double easting_origin_, northing_origin_, yaw_origin_;
@@ -641,6 +737,7 @@ private:
 
     std::vector<std::tuple<double, double, double, double>> rov_coord_;
     std::vector<mbes_ping> mbes_pings_;
+    std::vector<int> intensities_;
 };
 
 int main(int argc, char** argv){

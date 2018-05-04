@@ -11,10 +11,10 @@ CATKIN_IGNORE
 *.includes
 
 # CMake files
-build/*
+*/build/*
 
 # Binaries
-bin/*
+*/bin/*
 
 # Data files
 mbes_data_parser/Data/*

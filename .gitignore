@@ -1,0 +1,20 @@
+*~
+*.pyc
+
+CATKIN_IGNORE
+
+# Qt files
+*.config
+*.creator
+*.creator.user
+*.files
+*.includes
+
+# CMake files
+*/build/*
+
+# Binaries
+*/bin/*
+
+# Data files
+mbes_data_parser/Data/*

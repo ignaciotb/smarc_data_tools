@@ -63,26 +63,32 @@ public:
         map_frame_ = "map";
         rov_frame_ = "rov_link";      
 
+        std::string dir_string;
+
+        ros::NodeHandle pn("~");
+        pn.param<std::string>("folder", dir_string, "");
+
         // Parse ROV track files
         first_pose_ = true;
-        const char* nav_dir = "/home/nacho/catkin_ws/src/smarc-project/smarc_data_tools/mbes_data_parser/Data/Windfarm/NavUTM/";
-        readNavFilesInDir(nav_dir);
+        std::string nav_dir = dir_string+"/NavUTM/";
+        readNavFilesInDir(nav_dir.c_str());
 
         // Parse MBES pings files
         first_orientation_ = true;
-        const char* pings_dir = "/home/nacho/catkin_ws/src/smarc-project/smarc_data_tools/mbes_data_parser/Data/Windfarm/Pings/";
-        readMBESFilesInDir(pings_dir);
+        std::string pings_dir = dir_string+"/Pings/";
+        readMBESFilesInDir(pings_dir.c_str());
 
         // Parse Intensity files
-        const char* intensities_dir = "/home/nacho/catkin_ws/src/smarc-project/smarc_data_tools/mbes_data_parser/Data/Windfarm/Intensities/";
-        readMBESIntFilesInDir(intensities_dir);
+        std::string intensities_dir = dir_string+"/Intensities/";
+        readMBESIntFilesInDir(intensities_dir.c_str());
 
         std::cout << "Number of pings: " << mbes_pings_.size() << std::endl;
         std::cout << "Number of intensities: " << intensities_.size() << std::endl;
         std::cout << "Number of ROV poses: " << rov_coord_.size() << std::endl;
 
         // Run main loop
-        double freq = 100;
+        double freq;
+        pn.param<double>("freq", freq, 100.);
         timer_run_ = nh_->createTimer(ros::Duration(1.0 / std::max(freq, 1.0)), &MBESParser::run, this);
 
         ros::spin();

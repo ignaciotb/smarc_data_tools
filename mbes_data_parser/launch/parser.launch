@@ -1,0 +1,11 @@
+<launch>
+
+  <arg name="folder"/>
+  <arg name="freq" default="100."/>
+
+  <node name="mbes_parser_node" pkg="mbes_data_parser" type="mbes_parser_node" respawn="false" output="screen">
+    <param name="folder" value="$(arg folder)"/>
+    <param name="freq" value="$(arg freq)"/>
+  </node>
+
+</launch>

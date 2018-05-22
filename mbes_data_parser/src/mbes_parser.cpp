@@ -5,6 +5,7 @@
 #include <visualization_msgs/Marker.h>
 #include <sensor_msgs/PointCloud2.h>
 #include <geometry_msgs/PoseStamped.h>
+#include <std_msgs/Empty.h>
 
 #include <pcl_ros/point_cloud.h>
 #include <pcl_ros/transforms.h>
@@ -22,6 +23,7 @@
 #include <dirent.h>
 
 #include <tuple>
+#include <unordered_set>
 #include <math.h>
 #include <algorithm>
 
@@ -60,29 +62,37 @@ public:
         fulltrack_pub_ = nh_->advertise<visualization_msgs::MarkerArray>((node_name_ + "/rov_fulltrack"), 10);
         rov_pose_pub_ = nh_->advertise<geometry_msgs::PoseStamped>((node_name_ + "/rov_pose_t"), 10);
         pcl_pub_ = nh_->advertise<PointCloudI> ((node_name_ + "/mbes_pcl"), 100);
+        newtrack_pub_ = nh_->advertise<std_msgs::Empty> ((node_name_ + "/new_track"), 1);
         map_frame_ = "map";
         rov_frame_ = "rov_link";      
 
+        std::string dir_string;
+
+        ros::NodeHandle pn("~");
+        pn.param<std::string>("folder", dir_string, "");
+
         // Parse ROV track files
         first_pose_ = true;
-        const char* nav_dir = "/home/nacho/catkin_ws/src/smarc-project/smarc_data_tools/mbes_data_parser/Data/Windfarm/NavUTM/";
-        readNavFilesInDir(nav_dir);
+        std::string nav_dir = dir_string+"/NavUTM/";
+        readNavFilesInDir(nav_dir.c_str());
 
         // Parse MBES pings files
         first_orientation_ = true;
-        const char* pings_dir = "/home/nacho/catkin_ws/src/smarc-project/smarc_data_tools/mbes_data_parser/Data/Windfarm/Pings/";
-        readMBESFilesInDir(pings_dir);
+        std::string pings_dir = dir_string+"/Pings/";
+        readMBESFilesInDir(pings_dir.c_str());
 
         // Parse Intensity files
-        const char* intensities_dir = "/home/nacho/catkin_ws/src/smarc-project/smarc_data_tools/mbes_data_parser/Data/Windfarm/Intensities/";
-        readMBESIntFilesInDir(intensities_dir);
+        std::string intensities_dir = dir_string+"/Intensities/";
+        readMBESIntFilesInDir(intensities_dir.c_str());
 
         std::cout << "Number of pings: " << mbes_pings_.size() << std::endl;
         std::cout << "Number of intensities: " << intensities_.size() << std::endl;
         std::cout << "Number of ROV poses: " << rov_coord_.size() << std::endl;
 
         // Run main loop
-        double freq = 100;
+        double freq;
+        pn.param<double>("freq", freq, 100.);
+        // TODO: take time stamps/freq from the multibeam pings instead
         timer_run_ = nh_->createTimer(ros::Duration(1.0 / std::max(freq, 1.0)), &MBESParser::run, this);
 
         ros::spin();
@@ -103,6 +113,12 @@ private:
         // Publish one MBES ping
         if(i_ >= mbes_pings_.size()-1){ // Run pub in a loop
             i_ = 0;
+        }
+
+        // if true, this is the start of a new track,
+        // publish on an empty message
+        if (new_track_inds_.count(i_) != 0) {
+            newtrack_pub_.publish(std_msgs::Empty());
         }
 
         // Extract beams as PCL
@@ -208,7 +224,7 @@ private:
         tf::Matrix3x3 m;
         m.setRPY(mbes_pings_.at(i_).roll_ * M_PI/180,
                  mbes_pings_.at(i_).pitch_ * M_PI/180,
-                 mbes_pings_.at(i_).heave_ * M_PI/180);
+                 mbes_pings_.at(i_).heading_ * M_PI/180);
 
         tf_rov_map = tf::Transform(m, tf::Vector3(position(0),position(1),position(2)));
     }
@@ -243,12 +259,13 @@ private:
         pcl_msg->width = mbes_pings_.at(i).beams.size() + mbes_pings_.at(i+1).beams.size();
 
         // One side ping
+        // TODO: will intensitites work the second time around if we pop them all???
         std::for_each(mbes_pings_.at(i).beams.begin(), mbes_pings_.at(i).beams.end(), [&](std::vector<double> beam){
             pclI.intensity = intensities_.back();
             intensities_.pop_back();
             pclI.x = beam.at(0);
             pclI.y = beam.at(1);
-            pclI.z = beam.at(2);
+            pclI.z = beam.at(2) - mbes_pings_.at(i).heave_;
             pcl_msg->points.push_back(pclI);
         });
 
@@ -258,7 +275,7 @@ private:
             intensities_.pop_back();
             pclI.x = beam.at(0);
             pclI.y = beam.at(1);
-            pclI.z = beam.at(2);
+            pclI.z = beam.at(2) - mbes_pings_.at(i).heave_;
             pcl_msg->points.push_back(pclI);
         });
 
@@ -435,6 +452,8 @@ private:
 
                 // Init state machine
                 beam_num_in_file = 0;
+                // Save index of first mbes ping
+                new_track_inds_.insert(mbes_pings_.size());
 
                 // Read a new line
                 while (std::getline(infile, line)){
@@ -530,8 +549,8 @@ private:
                         std::cout << "New ping: "<< ping_id << " timing: " << time_stamp - time_stamp_origin <<  " time_stamp " << time_stamp << " and origin time_stamp " << time_stamp_origin << std::endl;
                         mbes_pings_.emplace_back(ping_id,
                                                  time_stamp - time_stamp_origin,
-                                                 heading,
-                                                 heave - yaw_origin,
+                                                 heading - yaw_origin,
+                                                 heave,
                                                  pitch - pitch_origin,
                                                  roll_origin - roll_origin);
                         prev_ping_id = ping_id;
@@ -539,6 +558,8 @@ private:
                     time_stamp = 0;
                     // Store new beam in current ping
 //                    std::cout << "New beam in ping "<< ping_id << ", " << time_stamp - time_stamp_origin << std::endl;
+                    // TODO: wouldn't it be nicer to have this as eigen matrices/vectors instead?
+                    // you could even have a fixed size 256x3 matrix since you know the size of the pings
                     std::vector<double> new_beam;
                     new_beam.push_back(x_pose - easting_origin_);
                     new_beam.push_back(y_pose - northing_origin_);
@@ -724,6 +745,7 @@ private:
     ros::Publisher fulltrack_pub_;
     ros::Publisher pcl_pub_;
     ros::Publisher rov_pose_pub_;
+    ros::Publisher newtrack_pub_;
 
     std::string map_frame_;
     std::string rov_frame_;
@@ -737,6 +759,7 @@ private:
 
     std::vector<std::tuple<double, double, double, double>> rov_coord_;
     std::vector<mbes_ping> mbes_pings_;
+    std::unordered_set<int> new_track_inds_;
     std::vector<int> intensities_;
 };
 
